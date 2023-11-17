@@ -1,0 +1,738 @@
+---
+title: "R Notebook"
+output: pdf_document
+---
+
+#Library
+```{r}
+library(dplyr)
+library(tidyr)
+library(tidyverse)
+library(reshape2)
+library(igraph)
+library(networkD3) #Sankey
+library(webshot) #html to png (sankey)
+```
+
+#Data
+
+##Artifical 
+for graphical abstract
+
+```{r}
+A <- matrix(c(0,1,0,0,0,1,0,1,0,0,1,1,0,1,0,0,0,0,0,1,0,0,0,1,0), nrow = 5, ncol = 5)
+Ma <- matrix(c(0,1,1,0,0,1,0,0,0,0,0,0,0,0,1,0,0,1,0,0,0,0,1,1,0), nrow = 5, ncol = 5)
+
+A
+Ma
+```
+
+##Empirical
+
+```{r}
+dat_e <- read.csv2("edges_long.csv")
+dat_n <- read.csv2("nodes.csv")
+```
+
+```{r}
+dat_n$id <- as.character(dat_n$id)
+```
+
+```{r}
+#wide edge list: layers are in columns
+dat_e$l <- as.numeric(gsub("l", "", dat_e$layer))
+
+dat_we <- dat_e %>% select(c("from","to","l")) %>% unique() %>% pivot_wider(names_from = "l", values_from = "l")
+colnames(dat_we) <- c("from","to", paste0("l", c(3,1,4,2)))
+dat_we[,3:ncol(dat_we)] <- replace(dat_we[,3:ncol(dat_we)], !is.na(dat_we[,3:ncol(dat_we)]), 1) #!is.na() to 1
+dat_we <- dat_we %>% replace(is.na(.), 0) #is.na() to 0
+
+dat_we$from <- as.character(dat_we$from)
+dat_we$to <- as.character(dat_we$to)
+
+dat_we <- dat_we[,c("from","to","l1","l2","l3","l4")]
+```
+
+#Q^pair l1, l2
+
+observed network layer: l1 (cooperation)
+null network layer: l2 (friendship)
+
+##C_1: Configuration model as reference
+
+```{r}
+g <- graph_from_edgelist(as.matrix(dat_we[,c("from","to")]), directed = TRUE)
+E(g)$weight <- dat_we$l1
+A <- as.matrix(as_adjacency_matrix(g, attr = "weight")) %>% replace(is.na(.), 0)
+```
+
+```{r}
+x <- data.frame(id=colnames(A), 
+                c=louvain(A, gamma = 1)$community
+                )
+dat_n <- left_join(dat_n, x, by="id")
+colnames(dat_n)[colnames(dat_n)=="c"] <- "c_l1_conf"
+table(dat_n$c_l1_conf)
+```
+
+```{r}
+#Q_c values
+diag(louvain(A, gamma = 1)$B)/sum(A)
+
+#Q^conf_l1
+louvain(A, gamma = 1)$Q
+```
+
+```{r}
+#modules by department
+table(dat_n$dep, dat_n$c_l1_conf)
+```
+
+```{r}
+dat_we <- left_join(dat_we, dat_n[,c("id","c_l1_conf")], by=c("from"="id"))
+dat_we <- left_join(dat_we, dat_n[,c("id","c_l1_conf")], by=c("to"="id"))
+```
+
+```{r}
+r <- data.frame()
+for (i in 1:max(dat_n$c_l1_conf)){
+  for (j in 1:max(dat_n$c_l1_conf)){
+    x <- dat_we %>% filter(c_l1_conf.x==i & c_l1_conf.y==j & l1==1) %>% summarise_at(vars("l1":"l4"), mean)
+    x$from <- i
+    x$to <- j
+    r <- rbind(r,x)
+  }}
+r
+
+#the probability of l2, l3, l4 overlapping edges next to l1 edges in modules
+r %>% filter(from == to)
+```
+
+##C_2: l1 paired l2 null network gamma = 1
+
+```{r}
+#A_ij observed network: l1
+g <- graph_from_edgelist(as.matrix(dat_we[,c("from","to")]), directed = TRUE)
+E(g)$weight <- dat_we$l1
+A <- as.matrix(as_adjacency_matrix(g, attr = "weight")) %>% replace(is.na(.), 0)
+```
+
+```{r}
+#P_ij null network: l2
+g1 <- graph_from_edgelist(as.matrix(dat_we[,c("from","to")]), directed = TRUE)
+E(g1)$weight <- dat_we$l2
+
+Ma <- as.matrix(as_adjacency_matrix(g1, attr = "weight")) %>% replace(is.na(.), 0)
+Ma <- Ma/sum(Ma)*sum(A)
+```
+
+```{r}
+x <- data.frame(id=colnames(A), 
+                c=louvain(A, gamma = 1, mat=Ma)$community
+                )
+dat_n <- left_join(dat_n, x, by="id")
+colnames(dat_n)[colnames(dat_n)=="c"] <- "c_l1_l2_pair_g1"
+table(dat_n$c_l1_l2_pair_g1)
+```
+
+```{r}
+#Q_c values
+diag(louvain(A, gamma = 1, mat = Ma)$B)/sum(A)
+
+#Q^pair_l1l2
+louvain(A, gamma = 1, mat = Ma)$Q
+```
+
+```{r}
+#modules by department
+table(dat_n$dep, dat_n$c_l1_l2_pair_g1)
+```
+
+```{r}
+dat_we <- left_join(dat_we, dat_n[,c("id","c_l1_l2_pair_g1")], by=c("from"="id"))
+dat_we <- left_join(dat_we, dat_n[,c("id","c_l1_l2_pair_g1")], by=c("to"="id"))
+```
+
+```{r}
+r <- data.frame()
+for (i in 1:max(dat_n$c_l1_l2_pair_g1)){
+  for (j in 1:max(dat_n$c_l1_l2_pair_g1)){
+    x <- dat_we %>% filter(c_l1_l2_pair_g1.x==i & c_l1_l2_pair_g1.y==j & l1==1) %>% summarise_at(vars("l1":"l4"), mean)
+    x$from <- i
+    x$to <- j
+    r <- rbind(r,x)
+  }}
+r
+
+#the probability of l2, l3, l4 overlapping edges next to l1 in modules
+r %>% filter(from == to)
+```
+
+
+##C_3: l1 paired l2 null network gamma = 2
+
+```{r}
+#A_ij observed network: l1
+g <- graph_from_edgelist(as.matrix(dat_we[,c("from","to")]), directed = TRUE)
+E(g)$weight <- dat_we$l1
+A <- as.matrix(as_adjacency_matrix(g, attr = "weight")) %>% replace(is.na(.), 0)
+```
+
+```{r}
+#P_ij null network: l2
+g1 <- graph_from_edgelist(as.matrix(dat_we[,c("from","to")]), directed = TRUE)
+E(g1)$weight <- dat_we$l2
+
+Ma <- as.matrix(as_adjacency_matrix(g1, attr = "weight")) %>% replace(is.na(.), 0)
+Ma <- Ma/sum(Ma)*sum(A)
+```
+
+```{r}
+x <- data.frame(id=colnames(A), 
+                c=louvain(A, gamma = 2, mat=Ma)$community
+                )
+dat_n <- left_join(dat_n, x, by="id")
+colnames(dat_n)[colnames(dat_n)=="c"] <- "c_l1_l2_pair_g2"
+table(dat_n$c_l1_l2_pair_g2)
+```
+
+```{r}
+#Q_c values
+diag(louvain(A, gamma = 2, mat = Ma)$B)/sum(A)
+
+#Q^pair_l1l2
+louvain(A, gamma = 2, mat = Ma)$Q
+```
+
+```{r}
+#modules by department
+table(dat_n$dep, dat_n$c_l1_l2_pair_g2)
+```
+
+```{r}
+dat_we <- left_join(dat_we, dat_n[,c("id","c_l1_l2_pair_g2")], by=c("from"="id"))
+dat_we <- left_join(dat_we, dat_n[,c("id","c_l1_l2_pair_g2")], by=c("to"="id"))
+```
+
+```{r}
+r <- data.frame()
+for (i in 1:max(dat_n$c_l1_l2_pair_g2)){
+  for (j in 1:max(dat_n$c_l1_l2_pair_g2)){
+    x <- dat_we %>% filter(c_l1_l2_pair_g2.x==i & c_l1_l2_pair_g2.y==j & l1==1) %>% summarise_at(vars("l1":"l4"), mean)
+    x$from <- i
+    x$to <- j
+    r <- rbind(r,x)
+  }}
+r
+
+#the probability of l2, l3, l4 overlapping edges next to l1 in modules
+r %>% filter(from == to)
+```
+
+##Sankey
+
+```{r}
+#the number of modules should rename because of simplify the figure
+
+#links 1
+x1 <- data.frame(source=dat_n$c_l1_conf, target=dat_n$c_l1_l2_pair_g1) %>% group_by(source, target) %>% summarise(value=n()) %>% as.data.frame()
+x1$target <- x1$target+100
+x1 <- x1 %>% filter(source<=6) #filter out modules from source with 1 member
+x1$source <- dplyr::recode(x1$source, '1'=1, '2'=2, '3'=3, '4'=6, '5'=4, '6'=5) #rename modules to avoid crossing edges 
+x1$target <- dplyr::recode(x1$target, '105'=101, '101'=102, '102'=103, '103'=104, '106'=105, '104'=106, '107'=107) #rename modules to avoid crossing edges 
+
+#links 2
+x2 <- data.frame(source=dat_n$c_l1_l2_pair_g1, target=dat_n$c_l1_l2_pair_g2) %>% group_by(source, target) %>% summarise(value=n()) %>% as.data.frame()
+x2$source <- x2$source+100
+x2$target <- x2$target+200
+x2 <- x2 %>% filter(source<=107) #filter out modules from source with 1 member
+x2$source <- dplyr::recode(x2$source, '105'=101, '101'=102, '102'=103, '103'=104, '106'=105, '104'=106, '107'=107) #rename modules to avoid crossing edges
+x2$target <- dplyr::recode(x2$target, '211'=201, '203'=202, '201'=203, '202'=204, '204'=205, '205'=206, 
+                           '206'=207, '212'=208, '215'=209, '216'=210, '207'=211, '210'=212, '208'=213, '214'=214,
+                           '209'=215, '213'=216) #rename modules to avoid crossing edges
+
+x <- rbind(x1,x2)
+
+#nodes
+y <- data.frame(name=c(as.character(x$source), as.character(x$target)) %>% unique())
+y$groups <- as.factor(c(rep("a",6), rep("b",7), rep("c",15)))
+
+#links to plot
+x$IDsource <- match(x$source, y$name)-1 
+x$IDtarget <- match(x$target, y$name)-1
+x$groups <- as.factor(c("l"))
+
+x$source <- factor(x$source, levels=unique(x$source))
+
+my_color <- 'd3.scaleOrdinal() .domain(["a", "b","c","l"]) .range(["#b3e0ff","#b3ffb3","#ccffcc","#f3e5d8"])'
+
+sn <- sankeyNetwork(Links = x, Nodes = y, Source = "IDsource", Target = "IDtarget", Value = "value", NodeID = "name",
+              fontSize = 20, fontFamily = "Calibri", nodeWidth = 20, 
+              colourScale=my_color, NodeGroup="groups", LinkGroup = "groups", iterations = 4,
+              width = 400, height = 400)
+sn
+#saveNetwork(sn, "sn00.html")
+
+#webshot("sn00.html", "sn00.png", vwidth = 400, vheight = 400, zoom=2)
+```
+
+#Q^compl l3, l4
+
+##C_1: Configuration model as reference
+
+```{r}
+g <- graph_from_edgelist(as.matrix(dat_we[,c("from","to")]), directed = TRUE)
+E(g)$weight <- dat_we$l3
+A <- as.matrix(as_adjacency_matrix(g, attr = "weight")) %>% replace(is.na(.), 0)
+```
+
+```{r}
+x <- data.frame(id=colnames(A), 
+                c=louvain(A, gamma = 1)$community
+                )
+dat_n <- left_join(dat_n, x, by="id")
+colnames(dat_n)[colnames(dat_n)=="c"] <- "c_l3_conf"
+table(dat_n$c_l3_conf)
+```
+
+```{r}
+#Q_c values
+diag(louvain(A, gamma = 1)$B)/sum(A)
+
+#Q^conf_l1
+louvain(A, gamma = 1)$Q
+```
+
+```{r}
+#modules by department
+table(dat_n$dep, dat_n$c_l3_conf)
+```
+
+```{r}
+dat_we <- left_join(dat_we, dat_n[,c("id","c_l3_conf")], by=c("from"="id"))
+dat_we <- left_join(dat_we, dat_n[,c("id","c_l3_conf")], by=c("to"="id"))
+```
+
+```{r}
+r <- data.frame()
+for (i in 1:max(dat_n$c_l3_conf)){
+  for (j in 1:max(dat_n$c_l3_conf)){
+    x <- dat_we %>% filter(c_l3_conf.x==i & c_l3_conf.y==j & l3==1) %>% summarise_at(vars("l1":"l4"), mean)
+    x$from <- i
+    x$to <- j
+    r <- rbind(r,x)
+  }}
+r
+
+#the probability of l1, l2, l4 overlapping edges next to l3 edges in modules
+r %>% filter(from == to)
+```
+
+##C_2 l3 complement l4 gamma = 1
+
+```{r}
+#A_ij observed network: l3
+g <- graph_from_edgelist(as.matrix(dat_we[,c("from","to")]), directed = TRUE)
+E(g)$weight <- dat_we$l3
+A <- as.matrix(as_adjacency_matrix(g, attr = "weight"))
+```
+
+```{r}
+#P_ij null network: l4
+g1 <- graph_from_edgelist(as.matrix(dat_we[,c("from","to")]), directed = TRUE)
+E(g1)$weight <- dat_we$l4
+
+Ma <- as.matrix(as_adjacency_matrix(g1, attr = "weight"))
+Ma <- (Ma-1)*-1 #generate complement graph of an unweighted network
+
+Ma <- Ma/sum(Ma)*sum(A)
+```
+
+```{r}
+x <- data.frame(id=colnames(A),
+                c=louvain(A, gamma = 1, mat = Ma)$community)
+dat_n <- dplyr::left_join(dat_n, x, by="id")
+colnames(dat_n)[colnames(dat_n)=="c"] <- "c_l3_l4_compl_g1"
+```
+
+```{r}
+#Q_c values of communities
+diag(louvain(A, gamma = 1, mat = Ma)$B)/sum(A)
+
+#Q^pair_l1l2
+louvain(A, gamma = 1, mat = Ma)$Q
+
+table(dat_n$c_l3_l4_compl_g1)
+```
+
+```{r}
+dat_we <- left_join(dat_we, dat_n[,c("id","c_l3_l4_compl_g1")], by=c("from"="id"))
+dat_we <- left_join(dat_we, dat_n[,c("id","c_l3_l4_compl_g1")], by=c("to"="id"))
+```
+
+```{r}
+r <- data.frame()
+for (i in 1:max(dat_n$c_l3_l4_compl_g1)){
+  for (j in 1:max(dat_n$c_l3_l4_compl_g1)){
+    x <- dat_we %>% filter(c_l3_l4_compl_g1.x==i & c_l3_l4_compl_g1.y==j & l3==1) %>% 
+      summarise_at(vars("l1":"l4"), mean)
+    x$from <- i
+    x$to <- j
+    r <- rbind(r,x)
+  }}
+r
+
+#the probability of l1, l2, l4 overlapping edges next to l3 in communities
+r %>% filter(from==to)
+```
+
+##C_2 l3 complement l4 gamma = 2
+
+```{r}
+#A_ij observed network: l3
+g <- graph_from_edgelist(as.matrix(dat_we[,c("from","to")]), directed = TRUE)
+E(g)$weight <- dat_we$l3
+A <- as.matrix(as_adjacency_matrix(g, attr = "weight"))
+```
+
+```{r}
+#P_ij null network: l4
+g1 <- graph_from_edgelist(as.matrix(dat_we[,c("from","to")]), directed = TRUE)
+E(g1)$weight <- dat_we$l4
+
+Ma <- as.matrix(as_adjacency_matrix(g1, attr = "weight"))
+Ma <- (Ma-1)*-1 #generate complement graph of an unweighted network
+
+Ma <- Ma/sum(Ma)*sum(A)
+```
+
+```{r}
+x <- data.frame(id=colnames(A),
+                c=louvain(A, gamma = 2, mat = Ma)$community)
+dat_n <- dplyr::left_join(dat_n, x, by="id")
+colnames(dat_n)[colnames(dat_n)=="c"] <- "c_l3_l4_compl_g2"
+```
+
+```{r}
+#Q_c values of communities
+diag(louvain(A, gamma = 2, mat = Ma)$B)/sum(A)
+
+#Q^pair_l1l2
+louvain(A, gamma = 2, mat = Ma)$Q
+
+table(dat_n$c_l3_l4_compl_g2)
+```
+
+```{r}
+dat_we <- left_join(dat_we, dat_n[,c("id","c_l3_l4_compl_g2")], by=c("from"="id"))
+dat_we <- left_join(dat_we, dat_n[,c("id","c_l3_l4_compl_g2")], by=c("to"="id"))
+```
+
+```{r}
+r <- data.frame()
+for (i in 1:max(dat_n$c_l3_l4_compl_g2)){
+  for (j in 1:max(dat_n$c_l3_l4_compl_g2)){
+    x <- dat_we %>% filter(c_l3_l4_compl_g2.x==i & c_l3_l4_compl_g2.y==j & l3==1) %>% 
+      summarise_at(vars("l1":"l4"), mean)
+    x$from <- i
+    x$to <- j
+    r <- rbind(r,x)
+  }}
+r
+
+#the probability of l1, l2, l4 overlapping edges next to l3 in communities
+r %>% filter(from==to)
+```
+
+##Sankey
+
+```{r}
+#links
+x1 <- data.frame(source=dat_n$c_l3_conf, target=dat_n$c_l3_l4_compl_g1) %>% group_by(source, target) %>% summarise(value=n()) %>% as.data.frame()
+x1$target <- x1$target+100
+x1 <- x1 %>% filter(source<=6)
+x1$source <- dplyr::recode(x1$source, '5'=1, '1'=2, '2'=3, '3'=4, '4'=5, '6'=6)
+x1$target <- dplyr::recode(x1$target, '101'=101, '102'=102, '103'=103, '104'=104, '107'=105, '106'=106, '105'=107)
+
+x2 <- data.frame(source=dat_n$c_l3_l4_compl_g1, target=dat_n$c_l3_l4_compl_g2) %>% group_by(source, target) %>% summarise(value=n()) %>% as.data.frame()
+x2$source <- x2$source+100
+x2$target <- x2$target+200
+x2 <- x2 %>% filter(source<=107)
+x2$source <- dplyr::recode(x2$source, '101'=101, '102'=102, '103'=103, '104'=104, '107'=105, '106'=106, '105'=107)
+x2$target <- dplyr::recode(x2$target, '201'=201, '205'=202, '212'=203, '202'=204, '209'=205, '203'=206, 
+                           '210'=207, '204'=208, '207'=209, '206'=210, '211'=211, '208'=212)
+
+x <- rbind(x1,x2)
+
+#nodes
+y <- data.frame(name=c(as.character(x$source), as.character(x$target)) %>% unique())
+y$groups <- as.factor(c(rep("a",6), rep("b",7), rep("c",12)))
+
+#links to plot
+x$IDsource <- match(x$source, y$name)-1 
+x$IDtarget <- match(x$target, y$name)-1
+x$groups <- as.factor(c("l"))
+
+x$source <- factor(x$source, levels=unique(x$source))
+
+my_color <- 'd3.scaleOrdinal() .domain(["a", "b","c","l"]) .range(["#b3e0ff","#b3ffb3","#ccffcc","#f3e5d8"])'
+
+sn <- sankeyNetwork(Links = x, Nodes = y, Source = "IDsource", Target = "IDtarget", Value = "value", NodeID = "name",
+              fontSize = 20, fontFamily = "Calibri", nodeWidth = 20, 
+              colourScale=my_color, NodeGroup="groups", LinkGroup = "groups",
+              width = 400, height = 400)
+sn
+saveNetwork(sn, "sn2.html")
+
+webshot("sn2.html", "sn2.png", vwidth = 400, vheight = 400, zoom=2)
+```
+
+#Q^multi l1, l2, l3
+
+##C_1: Configuration model of weighted
+
+```{r}
+g <- graph_from_edgelist(as.matrix(dat_we[,c("from","to")]), directed = TRUE)
+E(g)$weight <- dat_we$l1 + dat_we$l2 + dat_we$l3
+
+A <- as.matrix(as_adjacency_matrix(g, attr = "weight"))
+```
+
+```{r}
+x <- data.frame(id=colnames(A), 
+                c=louvain(A, gamma = 1)$community)
+dat_n <- left_join(dat_n, x, by="id")
+colnames(dat_n)[colnames(dat_n)=="c"] <- "c_l1_l2_l3_conf"
+```
+
+##C_2: l1, l2, l3 multi
+
+###l1 null
+
+```{r}
+g <- graph_from_edgelist(as.matrix(dat_we[,c("from","to")]), directed = TRUE)
+E(g)$weight <- dat_we$l1 + dat_we$l2 + dat_we$l3
+
+A <- as.matrix(as_adjacency_matrix(g, attr = "weight"))
+```
+
+```{r}
+g1 <- graph_from_edgelist(as.matrix(dat_we[,c("from","to")]), directed = TRUE)
+E(g1)$weight <- dat_we$l1
+
+Ma <- as.matrix(as_adjacency_matrix(g1, attr = "weight"))
+Ma <- (Ma-max(Ma))*-1
+Ma <- Ma/sum(Ma)*sum(A)
+```
+
+```{r}
+x <- data.frame(id=colnames(A), 
+                c=louvain(A, gamma = 1, mat = Ma)$community)
+dat_n <- left_join(dat_n, x, by="id")
+colnames(dat_n)[colnames(dat_n)=="c"] <- "c_l1_l2_l3_multi_l1"
+```
+
+###l2 null
+
+```{r}
+g <- graph_from_edgelist(as.matrix(dat_we[,c("from","to")]), directed = TRUE)
+E(g)$weight <- dat_we$l1 + dat_we$l2 + dat_we$l3
+
+A <- as.matrix(as_adjacency_matrix(g, attr = "weight"))
+```
+
+```{r}
+g1 <- graph_from_edgelist(as.matrix(dat_we[,c("from","to")]), directed = TRUE)
+E(g1)$weight <- dat_we$l2
+
+Ma <- as.matrix(as_adjacency_matrix(g1, attr = "weight"))
+Ma <- (Ma-max(Ma))*-1
+Ma <- Ma/sum(Ma)*sum(A)
+```
+
+```{r}
+x <- data.frame(id=colnames(A), 
+                c=louvain(A, gamma = 1, mat = Ma)$community)
+dat_n <- left_join(dat_n, x, by="id")
+colnames(dat_n)[colnames(dat_n)=="c"] <- "c_l1_l2_l3_multi_l2"
+```
+
+###l3 null
+
+```{r}
+g <- graph_from_edgelist(as.matrix(dat_we[,c("from","to")]), directed = TRUE)
+E(g)$weight <- dat_we$l1 + dat_we$l2 + dat_we$l3
+
+A <- as.matrix(as_adjacency_matrix(g, attr = "weight"))
+```
+
+```{r}
+g1 <- graph_from_edgelist(as.matrix(dat_we[,c("from","to")]), directed = TRUE)
+E(g1)$weight <- dat_we$l3
+
+Ma <- as.matrix(as_adjacency_matrix(g1, attr = "weight"))
+Ma <- (Ma-max(Ma))*-1
+Ma <- Ma/sum(Ma)*sum(A)
+```
+
+```{r}
+x <- data.frame(id=colnames(A), 
+                c=louvain(A, gamma = 1, mat = Ma)$community)
+dat_n <- left_join(dat_n, x, by="id")
+colnames(dat_n)[colnames(dat_n)=="c"] <- "c_l1_l2_l3_multi_l3"
+```
+
+###l1_l2 null
+
+```{r}
+g <- graph_from_edgelist(as.matrix(dat_we[,c("from","to")]), directed = TRUE)
+E(g)$weight <- dat_we$l1 + dat_we$l2 + dat_we$l3
+
+A <- as.matrix(as_adjacency_matrix(g, attr = "weight"))
+```
+
+```{r}
+g1 <- graph_from_edgelist(as.matrix(dat_we[,c("from","to")]), directed = TRUE)
+E(g1)$weight <- dat_we$l1 + dat_we$l2
+
+Ma <- as.matrix(as_adjacency_matrix(g1, attr = "weight"))
+Ma <- (Ma-max(Ma))*-1
+Ma <- Ma/sum(Ma)*sum(A)
+```
+
+```{r}
+x <- data.frame(id=colnames(A), 
+                c=louvain(A, gamma = 1, mat = Ma)$community)
+dat_n <- left_join(dat_n, x, by="id")
+colnames(dat_n)[colnames(dat_n)=="c"] <- "c_l1_l2_l3_multi_l1_l2"
+```
+
+###l1_l3 null
+
+```{r}
+g <- graph_from_edgelist(as.matrix(dat_we[,c("from","to")]), directed = TRUE)
+E(g)$weight <- dat_we$l1 + dat_we$l2 + dat_we$l3
+
+A <- as.matrix(as_adjacency_matrix(g, attr = "weight"))
+```
+
+```{r}
+g1 <- graph_from_edgelist(as.matrix(dat_we[,c("from","to")]), directed = TRUE)
+E(g1)$weight <- dat_we$l1 + dat_we$l3
+
+Ma <- as.matrix(as_adjacency_matrix(g1, attr = "weight"))
+Ma <- (Ma-max(Ma))*-1
+Ma <- Ma/sum(Ma)*sum(A)
+```
+
+```{r}
+x <- data.frame(id=colnames(A), 
+                c=louvain(A, gamma = 1, mat = Ma)$community)
+dat_n <- left_join(dat_n, x, by="id")
+colnames(dat_n)[colnames(dat_n)=="c"] <- "c_l1_l2_l3_multi_l1_l3"
+```
+
+###l2_l3 null
+
+```{r}
+g <- graph_from_edgelist(as.matrix(dat_we[,c("from","to")]), directed = TRUE)
+E(g)$weight <- dat_we$l1 + dat_we$l2 + dat_we$l3
+
+A <- as.matrix(as_adjacency_matrix(g, attr = "weight"))
+```
+
+```{r}
+g1 <- graph_from_edgelist(as.matrix(dat_we[,c("from","to")]), directed = TRUE)
+E(g1)$weight <- dat_we$l2 + dat_we$l3
+
+Ma <- as.matrix(as_adjacency_matrix(g1, attr = "weight"))
+Ma <- (Ma-max(Ma))*-1
+Ma <- Ma/sum(Ma)*sum(A)
+```
+
+```{r}
+x <- data.frame(id=colnames(A), 
+                c=louvain(A, gamma = 1, mat = Ma)$community)
+dat_n <- left_join(dat_n, x, by="id")
+colnames(dat_n)[colnames(dat_n)=="c"] <- "c_l1_l2_l3_multi_l2_l3"
+```
+
+##Compare
+
+```{r}
+compare(dat_n$c_l1_l2_l3_conf, dat_n$c_l1_l2_l3_multi_l1, method = "nmi")
+compare(dat_n$c_l1_l2_l3_conf, dat_n$c_l1_l2_l3_multi_l2, method = "nmi")
+compare(dat_n$c_l1_l2_l3_conf, dat_n$c_l1_l2_l3_multi_l3, method = "nmi")
+compare(dat_n$c_l1_l2_l3_conf, dat_n$c_l1_l2_l3_multi_l1_l2, method = "nmi")
+compare(dat_n$c_l1_l2_l3_conf, dat_n$c_l1_l2_l3_multi_l1_l3, method = "nmi")
+compare(dat_n$c_l1_l2_l3_conf, dat_n$c_l1_l2_l3_multi_l2_l3, method = "nmi")
+```
+
+```{r}
+#modularity
+g <- graph_from_edgelist(as.matrix(dat_we[,c("from","to")]), directed = TRUE)
+E(g)$weight <- dat_we$l1 + dat_we$l2 + dat_we$l3
+A <- as.matrix(as_adjacency_matrix(g, attr = "weight"))
+louvain(A, gamma = 1)$Q
+
+g <- graph_from_edgelist(as.matrix(dat_we[,c("from","to")]), directed = TRUE)
+E(g)$weight <- dat_we$l1 + dat_we$l2 + dat_we$l3
+A <- as.matrix(as_adjacency_matrix(g, attr = "weight"))
+g1 <- graph_from_edgelist(as.matrix(dat_we[,c("from","to")]), directed = TRUE)
+E(g1)$weight <- dat_we$l1
+Ma <- as.matrix(as_adjacency_matrix(g1, attr = "weight"))
+Ma <- (Ma-max(Ma))*-1
+Ma <- Ma/sum(Ma)*sum(A)
+louvain(A, gamma = 1, mat = Ma)$Q
+
+g <- graph_from_edgelist(as.matrix(dat_we[,c("from","to")]), directed = TRUE)
+E(g)$weight <- dat_we$l1 + dat_we$l2 + dat_we$l3
+A <- as.matrix(as_adjacency_matrix(g, attr = "weight"))
+g1 <- graph_from_edgelist(as.matrix(dat_we[,c("from","to")]), directed = TRUE)
+E(g1)$weight <- dat_we$l1
+Ma <- as.matrix(as_adjacency_matrix(g1, attr = "weight"))
+Ma <- (Ma-max(Ma))*-1
+Ma <- Ma/sum(Ma)*sum(A)
+louvain(A, gamma = 1, mat = Ma)$Q
+
+g <- graph_from_edgelist(as.matrix(dat_we[,c("from","to")]), directed = TRUE)
+E(g)$weight <- dat_we$l1 + dat_we$l2 + dat_we$l3
+A <- as.matrix(as_adjacency_matrix(g, attr = "weight"))
+g1 <- graph_from_edgelist(as.matrix(dat_we[,c("from","to")]), directed = TRUE)
+E(g1)$weight <- dat_we$l3
+Ma <- as.matrix(as_adjacency_matrix(g1, attr = "weight"))
+Ma <- (Ma-max(Ma))*-1
+Ma <- Ma/sum(Ma)*sum(A)
+louvain(A, gamma = 1, mat = Ma)$Q
+
+g <- graph_from_edgelist(as.matrix(dat_we[,c("from","to")]), directed = TRUE)
+E(g)$weight <- dat_we$l1 + dat_we$l2 + dat_we$l3
+A <- as.matrix(as_adjacency_matrix(g, attr = "weight"))
+g1 <- graph_from_edgelist(as.matrix(dat_we[,c("from","to")]), directed = TRUE)
+E(g1)$weight <- dat_we$l1 + dat_we$l2
+Ma <- as.matrix(as_adjacency_matrix(g1, attr = "weight"))
+Ma <- (Ma-max(Ma))*-1
+Ma <- Ma/sum(Ma)*sum(A)
+louvain(A, gamma = 1, mat = Ma)$Q
+
+g <- graph_from_edgelist(as.matrix(dat_we[,c("from","to")]), directed = TRUE)
+E(g)$weight <- dat_we$l1 + dat_we$l2 + dat_we$l3
+A <- as.matrix(as_adjacency_matrix(g, attr = "weight"))
+g1 <- graph_from_edgelist(as.matrix(dat_we[,c("from","to")]), directed = TRUE)
+E(g1)$weight <- dat_we$l1 + dat_we$l3
+Ma <- as.matrix(as_adjacency_matrix(g1, attr = "weight"))
+Ma <- (Ma-max(Ma))*-1
+Ma <- Ma/sum(Ma)*sum(A)
+louvain(A, gamma = 1, mat = Ma)$Q
+
+g <- graph_from_edgelist(as.matrix(dat_we[,c("from","to")]), directed = TRUE)
+E(g)$weight <- dat_we$l1 + dat_we$l2 + dat_we$l3
+A <- as.matrix(as_adjacency_matrix(g, attr = "weight"))
+g1 <- graph_from_edgelist(as.matrix(dat_we[,c("from","to")]), directed = TRUE)
+E(g1)$weight <- dat_we$l2 + dat_we$l3
+Ma <- as.matrix(as_adjacency_matrix(g1, attr = "weight"))
+Ma <- (Ma-max(Ma))*-1
+Ma <- Ma/sum(Ma)*sum(A)
+louvain(A, gamma = 1, mat = Ma)$Q
+```
+
